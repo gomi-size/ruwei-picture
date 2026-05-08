@@ -1,0 +1,90 @@
+server:
+  servlet:
+    context-path: /api
+    #cookie 30 天过期
+    session:
+      cookie:
+        max-age: 2592000
+  port: 8080
+spring:
+  application:
+    name: yu-picture-backend
+  profiles:
+    active: local
+  # 空间图片分表
+  shardingsphere:
+    datasource:
+      names: yu_picture
+      yu_picture:
+        type: com.zaxxer.hikari.HikariDataSource
+        driver-class-name: com.mysql.cj.jdbc.Driver
+        url: jdbc:mysql://localhost:3306/yu_picture
+        username: root
+        password: 123456
+    #rules:
+    #  sharding:
+    #    tables:
+    #      picture:
+    #        actual-data-nodes: yu_picture.picture  # 动态分表
+    #        table-strategy:
+    #          standard:
+    #            sharding-column: spaceId
+    #            sharding-algorithm-name: picture_sharding_algorithm  # 使用自定义分片算法
+    #    sharding-algorithms:
+    #      picture_sharding_algorithm:
+    #        type: CLASS_BASED
+    #        props:
+    #          strategy: standard
+    #          algorithmClassName: com.yupi.yupicturebackend.manager.sharding.PictureShardingAlgorithm
+    #props:
+    #  sql-show: true
+
+
+
+  #数据库配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/yu_picture
+    username: root
+    password: 123456
+    # 开放更大的文件上传体积
+  servlet:
+    multipart:
+      max-file-size: 10MB
+  redis:
+    host: 192.168.211.201  # 你的虚拟机 IP
+    port: 6379             # Redis 默认端口
+    database: 0            # 默认使用 0 号数据库
+    timeout: 5000ms        # 连接超时时间（5秒）
+    password: 123456  # <--- 把这行的注释解开，填上密码
+#session
+  session:
+    store-type: redis
+    timeout: 2592000
+mybatis-plus:
+  configuration:
+    # MyBatis 配置
+    map-underscore-to-camel-case: false
+    #开发环境打印日志
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: isDelete
+      logic-delete-value: 1 # 逻辑已删除值。可选，默认值为 1
+      logic-not-delete-value: 0 # 逻辑未删除值。可选，默认值为 0
+    #enable-sql-runner: true
+#接口文档
+knife4j:
+  enable: true
+  openapi:
+    title: 接口文档
+    version: 1.0
+    group:
+      default:
+        group-name: 默认分组
+        api-rule: package
+        api-rule-resources:
+          - com.yupi.yupicturebackend.controller
+##阿里云ai配置
+
+

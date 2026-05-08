@@ -1,0 +1,394 @@
+package com.yupi.yupicturebackend.controller;
+
+import cn.hutool.core.bean.BeanUtil;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.qcloud.cos.model.COSObject;
+import com.qcloud.cos.model.COSObjectInputStream;
+import com.qcloud.cos.utils.IOUtils;
+import com.yupi.yupicturebackend.Utils.QueryWrapperUtils;
+import com.yupi.yupicturebackend.annotation.AuthCheck;
+import com.yupi.yupicturebackend.api.aliyunAi.aliyunAiApi;
+import com.yupi.yupicturebackend.api.aliyunAi.model.CreateOutPaintingTaskResponse;
+import com.yupi.yupicturebackend.api.aliyunAi.model.GetOutPaintingTaskResponse;
+import com.yupi.yupicturebackend.api.imagesSearch.ImageSearchApiFacade;
+import com.yupi.yupicturebackend.api.imagesSearch.model.ImageSearchResult;
+import com.yupi.yupicturebackend.common.BaseResponse;
+import com.yupi.yupicturebackend.common.DeleteRequest;
+import com.yupi.yupicturebackend.common.ResultUtils;
+import com.yupi.yupicturebackend.constant.UserConstant;
+import com.yupi.yupicturebackend.exception.BusinessException;
+import com.yupi.yupicturebackend.exception.ErrorCode;
+import com.yupi.yupicturebackend.exception.ThrowUtils;
+import com.yupi.yupicturebackend.manager.CosManager;
+import com.yupi.yupicturebackend.manager.auth.SpaceUserAuthManager;
+import com.yupi.yupicturebackend.manager.auth.StpKit;
+import com.yupi.yupicturebackend.manager.auth.annotation.SaSpaceCheckPermission;
+import com.yupi.yupicturebackend.manager.auth.model.SpaceUserPermissionConstant;
+import com.yupi.yupicturebackend.model.dto.picture.*;
+import com.yupi.yupicturebackend.model.entity.Picture;
+import com.yupi.yupicturebackend.model.entity.Space;
+import com.yupi.yupicturebackend.model.entity.User;
+import com.yupi.yupicturebackend.model.enums.PictureReviewStatusEnum;
+import com.yupi.yupicturebackend.model.vo.PictureTagCategory;
+import com.yupi.yupicturebackend.model.vo.PictureVO;
+import com.yupi.yupicturebackend.service.PictureService;
+import com.yupi.yupicturebackend.service.SpaceService;
+import com.yupi.yupicturebackend.service.UserService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+
+import javax.annotation.Resource;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+@RestController
+@RequestMapping("/picture")
+@Slf4j
+public class PictureController {
+
+    @Resource
+    private UserService userService;
+    @Resource
+    private PictureService pictureService;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private SpaceService spaceService;
+    @Resource
+    private CosManager cosManager;
+    //构建本地缓存
+    private final Cache<String, String> LOCAL_CACHE =
+            Caffeine.newBuilder().initialCapacity(1024)
+                    .maximumSize(10000L)
+                    // 缓存 5 分钟移除
+                    .expireAfterWrite(5L, TimeUnit.MINUTES)
+                    .build();
+    @Resource
+    private aliyunAiApi aliyunAiApi;
+    @Resource
+    private SpaceUserAuthManager spaceUserAuthManager;
+
+
+    /**
+     * 上传图片（可重新上传）
+     */
+    @PostMapping("/upload")
+    /*    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_UPLOAD)*/
+    public BaseResponse<PictureVO> uploadPicture(
+            @RequestPart("file") MultipartFile multipartFile,
+           PictureUploadRequest pictureUploadRequest,
+            HttpServletRequest request) {
+        //需要判断用户是否登录
+        User loginUser = userService.getLoginUser(request);
+        //主要业务
+        PictureVO pictureVO = pictureService.uploadPicture(multipartFile, pictureUploadRequest, loginUser);
+        //一旦修改后直接清楚所有缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+
+        return ResultUtils.success(pictureVO);
+    }
+
+    /**
+     * 通过rul上传图片（可重新上传）
+     */
+    @PostMapping("/upload/url")
+    /*    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_UPLOAD)*/
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<PictureVO> uploadPictureByUrl(
+            @RequestBody PictureUploadRequest pictureUploadRequest,
+            HttpServletRequest request) {
+        //得到用户
+        User loginUser = userService.getLoginUser(request);
+        String fileUrl = pictureUploadRequest.getFileUrl();
+        //主要业务
+        PictureVO pictureVO = pictureService.uploadPicture(fileUrl, pictureUploadRequest, loginUser);
+        //一旦修改后直接清楚所有缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+        return ResultUtils.success(pictureVO);
+    }
+
+    /**
+     * 文件下载
+     */
+    @GetMapping("/download")
+    public BaseResponse<Boolean> downloadPicture(Long pictureId, HttpServletResponse response) throws IOException {
+        ThrowUtils.throwIf(pictureId==null,ErrorCode.PARAMS_ERROR,"参数不为空");
+        Picture picture = pictureService.getById(pictureId);
+        ThrowUtils.throwIf(picture==null,ErrorCode.PARAMS_ERROR,"没有该参数");
+        String pictureUrl = picture.getUrl();
+        COSObjectInputStream cosObjectInput = null;
+        try {
+            COSObject cosObject = cosManager.getObject(pictureUrl);
+            cosObjectInput = cosObject.getObjectContent();
+            // 处理下载到的流
+            byte[] bytes = IOUtils.toByteArray(cosObjectInput);
+            // 设置响应头
+            response.setContentType("application/octet-stream;charset=UTF-8");
+            response.setHeader("Content-Disposition", "attachment; filename=" + pictureUrl);
+            // 写入响应
+            response.getOutputStream().write(bytes);
+            response.getOutputStream().flush();
+        } catch (Exception e) {
+            log.error("file download error, filepath = " + pictureUrl, e);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "下载失败");
+        } finally {
+            if (cosObjectInput != null) {
+                cosObjectInput.close();
+            }
+        }
+        return ResultUtils.success(true);
+    }
+
+
+    /**
+     * 删除图片
+     *
+     * @param deleteRequest 删除的统一请求
+     * @param request       用户
+     * @return 布尔
+     */
+    @PostMapping("/delete")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DELETE)
+    public BaseResponse<Boolean> deletePicture(@RequestBody DeleteRequest deleteRequest
+            , HttpServletRequest request) {
+        ThrowUtils.throwIf(deleteRequest.getId()<=0,ErrorCode.PARAMS_ERROR);
+        Boolean result = pictureService.deletePicture(deleteRequest, request);
+        //进行清除缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+
+        return ResultUtils.success(result);
+    }
+
+    /**
+     * 更新图片（管理员使用）
+     */
+    @PostMapping("/update")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> updatePicture(@RequestBody PictureUpdateRequest pictureUpdateRequest, HttpServletRequest request) {
+        Boolean result = pictureService.updatePicture(pictureUpdateRequest, request);
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        //一旦修改后直接清楚所有缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+        return ResultUtils.success(result);
+    }
+
+    /**
+     * 根据id获取图片(获取的是未脱敏的数据)
+     */
+    @GetMapping("/get")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Picture> getPictureById(Long id, HttpServletRequest request) {
+        ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
+        Picture picture = pictureService.getById(id);
+        ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR);
+        /*Long spaceId = picture.getSpaceId();*/
+        /*if (spaceId != null) {
+            User loginUsers = userService.getLoginUser(request);
+            pictureService.checkPictureAuth(loginUsers,picture);
+        }*/
+        return ResultUtils.success(picture);
+    }
+
+
+    /**
+     * 根据id获取图片(获取的是脱敏的数据)
+     */
+    @GetMapping("/get/vo")
+    public BaseResponse<PictureVO> getPictureVOById(Long id,HttpServletRequest request) {
+        ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
+        Picture picture = pictureService.getById(id);
+        ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR);
+        Long spaceId = picture.getSpaceId();
+        Space space =null;
+        if (spaceId != null) {
+            //这个会自己去获取当前登录角色，然后校验是否有这个权限
+            boolean hasPermission = StpKit.SPACE.hasPermission(SpaceUserPermissionConstant.PICTURE_VIEW);
+            ThrowUtils.throwIf(!hasPermission, ErrorCode.NO_AUTH_ERROR);
+
+            space= spaceService.getById(spaceId);
+            ThrowUtils.throwIf(space == null, ErrorCode.NOT_FOUND_ERROR,"空间不存在");
+        }
+        //获取到权限列表
+        List<String> permissionList = spaceUserAuthManager.getPermissionList(space, userService.getLoginUser(request));
+
+        PictureVO pictureVO = BeanUtil.copyProperties(picture, PictureVO.class);
+
+        pictureVO.setPermissionList(permissionList);
+        return ResultUtils.success(pictureVO);
+    }
+
+    /**
+     * 分页查询（获取的是未脱敏的数据，管理员使用）
+     */
+    @PostMapping("/list/page")
+    public BaseResponse<Page<Picture>> listPictureByPage(@RequestBody PictureQueryRequest pictureQueryRequest) {
+        int current = pictureQueryRequest.getCurrent();
+        int pageSize = pictureQueryRequest.getPageSize();
+
+        Page<Picture> picturePage = pictureService.page(new Page<>(current, pageSize),
+                QueryWrapperUtils.getQueryWrapper(pictureQueryRequest));
+        return ResultUtils.success(picturePage);
+    }
+
+    /**
+     * 分页查询（获取是的脱敏的数据）
+     */
+    @PostMapping("/list/page/vo")
+    public BaseResponse<Page<PictureVO>> listPictureVOByPage(@RequestBody PictureQueryRequest pictureQueryRequest,HttpServletRequest request) {
+        int size = pictureQueryRequest.getPageSize();
+        ThrowUtils.throwIf(size>20, ErrorCode.PARAMS_ERROR);
+        //普通用户只能看到自己已经通过的图片，也可以看见未过审的图片，但是只能自己看到
+        pictureQueryRequest.setReviewStatus(PictureReviewStatusEnum.PASS.getValue());
+        //没有命中，从数据库查
+        Page<PictureVO> pictureVOPage = pictureService.
+                getPictureVOPage(pictureQueryRequest, request);
+        return ResultUtils.success(pictureVOPage);
+    }
+
+    /**
+     * 编辑图片（用户使用）
+     */
+    @PostMapping("/edit")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_EDIT)
+    public BaseResponse<Boolean> editPicture(@RequestBody PictureEditRequest pictureEditRequest,HttpServletRequest request) {
+        ThrowUtils.throwIf(pictureEditRequest == null, ErrorCode.PARAMS_ERROR);
+        Boolean result= pictureService.editPicture(pictureEditRequest,request);
+        //一旦修改后直接清楚所有缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+        return ResultUtils.success(result);
+    }
+
+
+    /**
+     * 获取标签
+     *
+     * @return
+     */
+    @GetMapping("/tag_category")
+    public BaseResponse<PictureTagCategory> listPictureTagCategory() {
+        PictureTagCategory pictureTagCategory = new PictureTagCategory();
+        List<String> tagList = Arrays.asList("热门", "搞笑", "生活", "高清", "艺术", "校园", "背景", "简历", "创意");
+        List<String> categoryList = Arrays.asList("模板", "电商", "表情包", "素材", "海报");
+        pictureTagCategory.setTagList(tagList);
+        pictureTagCategory.setCategoryList(categoryList);
+        return ResultUtils.success(pictureTagCategory);
+    }
+
+    /**
+     * 审核图片（管理员）
+     */
+    @PostMapping("/review")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> doPictureReview(@RequestBody PictureReviewRequest pictureReviewRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(pictureReviewRequest == null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+
+        pictureService.doPictureReview(pictureReviewRequest, loginUser);
+        //清楚缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+
+        return ResultUtils.success(true);
+    }
+    /**
+     * 批量获取图片并创建图片
+     */
+    @PostMapping("/upload/batch")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Integer> uploadPictureBatch(@RequestBody  PictureUploadByBatchRequest pictureUploadByBatchRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(pictureUploadByBatchRequest == null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        Integer uploadedCount = pictureService.uploadPictureByBatch(pictureUploadByBatchRequest, loginUser);
+        //一旦修改后直接清楚所有缓存
+        stringRedisTemplate.opsForValue().increment("yunpicture:list_version");
+        LOCAL_CACHE.invalidateAll();
+        LOCAL_CACHE.invalidateAll();
+        return ResultUtils.success(uploadedCount);
+    }
+
+    /**
+     * 以图搜图
+     */
+    @PostMapping("/search/picture")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_VIEW)
+    public BaseResponse<List<ImageSearchResult>> SearchPictureByPicture (@RequestBody SearchPictureByPictureRequest searchPictureByPictureRequest) {
+        ThrowUtils.throwIf(searchPictureByPictureRequest == null, ErrorCode.PARAMS_ERROR);
+        Long pictureId = searchPictureByPictureRequest.getPictureId();
+        ThrowUtils.throwIf(pictureId == null||pictureId<=0, ErrorCode.PARAMS_ERROR);
+        Picture picture = pictureService.getById(pictureId);
+        ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR);
+        //使用缩略图
+        List<ImageSearchResult> imageSearchResults = ImageSearchApiFacade.searchImage(picture.getThumbnailUrl());
+
+        return ResultUtils.success(imageSearchResults);
+    }
+
+    /**
+     * 按照颜色搜索
+     */
+    @PostMapping("/search/color")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_VIEW)
+    public BaseResponse<List<PictureVO>> SearchPictureByColor(@RequestBody SearchPictureByColorRequest SearchPictureByColorRequest,HttpServletRequest request) {
+        ThrowUtils.throwIf(SearchPictureByColorRequest == null, ErrorCode.PARAMS_ERROR);
+        String picColor = SearchPictureByColorRequest.getPicColor();
+        Long spaceId = SearchPictureByColorRequest.getSpaceId();
+        User loginUser = userService.getLoginUser(request);
+
+        List<PictureVO> pictureVOByColor = pictureService.searchPictureByColor(spaceId, picColor, loginUser);
+        return ResultUtils.success(pictureVOByColor);
+    }
+
+    /**
+     * 批量编辑图片
+     */
+    @PostMapping("/edit/batch")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DELETE)
+    public BaseResponse<Boolean> editPictureBatch(@RequestBody PictureEditByBatchRequest pictureEditByBatchRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(pictureEditByBatchRequest == null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        pictureService.editPictureByBatch(pictureEditByBatchRequest, loginUser);
+        return ResultUtils.success(true);
+    }
+
+
+    /**
+     * 创建 AI 扩图任务
+     */
+    @PostMapping("out_painting/create_task")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_DELETE)
+    public BaseResponse<CreateOutPaintingTaskResponse> createPictureOutPaintingTask(@RequestBody CreatePictureOutPaintingTaskRequest createPictureOutPaintingTaskRequest, HttpServletRequest request){
+
+        ThrowUtils.throwIf(createPictureOutPaintingTaskRequest == null||createPictureOutPaintingTaskRequest.getPictureId()==null, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        CreateOutPaintingTaskResponse response = pictureService.createPictureOutPaintingTask(createPictureOutPaintingTaskRequest, loginUser);
+        return ResultUtils.success(response);
+
+    }
+
+
+    /**
+     * 查询AI扩图任务
+     */
+    @GetMapping("out_painting/get_task")
+    public BaseResponse<GetOutPaintingTaskResponse> getPictureOutPaintingTask(String taskId){
+        ThrowUtils.throwIf(taskId == null, ErrorCode.PARAMS_ERROR);
+        GetOutPaintingTaskResponse task = aliyunAiApi.getOutPaintingTask(taskId);
+        return ResultUtils.success(task);
+    }
+
+
+
+}
