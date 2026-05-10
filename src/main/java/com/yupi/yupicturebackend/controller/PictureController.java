@@ -121,14 +121,15 @@ public class PictureController {
      * 文件下载
      */
     @GetMapping("/download")
-    public BaseResponse<Boolean> downloadPicture(Long pictureId, HttpServletResponse response) throws IOException {
+    public void downloadPicture(Long pictureId, HttpServletResponse response) throws IOException {
         ThrowUtils.throwIf(pictureId==null,ErrorCode.PARAMS_ERROR,"参数不为空");
         Picture picture = pictureService.getById(pictureId);
         ThrowUtils.throwIf(picture==null,ErrorCode.PARAMS_ERROR,"没有该参数");
         String pictureUrl = picture.getUrl();
         COSObjectInputStream cosObjectInput = null;
         try {
-            COSObject cosObject = cosManager.getObject(pictureUrl);
+            String key = cn.hutool.core.util.StrUtil.subAfter(pictureUrl, ".com/", false);
+            COSObject cosObject = cosManager.getObject(key);
             cosObjectInput = cosObject.getObjectContent();
             // 处理下载到的流
             byte[] bytes = IOUtils.toByteArray(cosObjectInput);
@@ -146,7 +147,6 @@ public class PictureController {
                 cosObjectInput.close();
             }
         }
-        return ResultUtils.success(true);
     }
 
 
