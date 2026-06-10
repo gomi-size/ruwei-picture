@@ -1,6 +1,7 @@
 package com.yupi.yupicturebackend.controller;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -128,7 +129,7 @@ public class PictureController {
         String pictureUrl = picture.getUrl();
         COSObjectInputStream cosObjectInput = null;
         try {
-            String key = cn.hutool.core.util.StrUtil.subAfter(pictureUrl, ".com/", false);
+            String key = StrUtil.subAfter(pictureUrl, ".com/", false);
             COSObject cosObject = cosManager.getObject(key);
             cosObjectInput = cosObject.getObjectContent();
             // 处理下载到的流
@@ -193,11 +194,6 @@ public class PictureController {
         ThrowUtils.throwIf(id == null || id <= 0, ErrorCode.PARAMS_ERROR);
         Picture picture = pictureService.getById(id);
         ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR);
-        /*Long spaceId = picture.getSpaceId();*/
-        /*if (spaceId != null) {
-            User loginUsers = userService.getLoginUser(request);
-            pictureService.checkPictureAuth(loginUsers,picture);
-        }*/
         return ResultUtils.success(picture);
     }
 

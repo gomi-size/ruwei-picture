@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import com.yupi.yupicturebackend.manager.dsiruptor.PictureEditEventProducer;
+import com.yupi.yupicturebackend.manager.rabbitMQ.RabbitMQWebSocketConfig;
 import com.yupi.yupicturebackend.manager.redisMessage.RedisWebSocketConfig;
 import com.yupi.yupicturebackend.manager.websocket.model.PictureEditActionEnum;
 import com.yupi.yupicturebackend.manager.websocket.model.PictureEditMessageTypeEnum;
@@ -15,6 +16,7 @@ import com.yupi.yupicturebackend.manager.websocket.model.PictureEditResponseMess
 import com.yupi.yupicturebackend.model.entity.User;
 import com.yupi.yupicturebackend.model.vo.UserVO;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -53,6 +55,8 @@ public class PictureEditHandler extends TextWebSocketHandler {
     // 分布式锁的前缀常量
     private static final String EDIT_LOCK_PREFIX = "picture:edit:lock:";
 
+    @Resource
+    private RabbitTemplate rabbitTemplate;
     /**
      * 链接建立成功（成员加入空间）
      *
@@ -82,7 +86,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
         responseMessage.setUser(BeanUtil.copyProperties(user, UserVO.class));
 
         //这个要广播给所有成员
-        publishToRedis(responseMessage);
+        publishToRabbitMq(responseMessage);
 
     }
 
@@ -135,7 +139,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
             pictureEditResponseMessage.setPictureId(pictureId);
             pictureEditResponseMessage.setUser(BeanUtil.copyProperties(user, UserVO.class));
             //TODO 全广播
-            publishToRedis(pictureEditResponseMessage);
+            publishToRabbitMq(pictureEditResponseMessage);
 
         }else {
             // 失败：锁已被占用，说明当前有人在编辑。
@@ -183,7 +187,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
             pictureEditResponseMessage.setUser(BeanUtil.copyProperties(user, UserVO.class));
             pictureEditResponseMessage.setEditAction(editAction);
             ///要除掉自己
-            publishToRedis(pictureEditResponseMessage);
+            publishToRabbitMq(pictureEditResponseMessage);
 
         }
 
@@ -228,8 +232,8 @@ public class PictureEditHandler extends TextWebSocketHandler {
             pictureEditResponseMessage.setMessage(message);
             pictureEditResponseMessage.setPictureId(pictureId);
             pictureEditResponseMessage.setUser(BeanUtil.copyProperties(user, UserVO.class));
-            ///全广播
-            publishToRedis(pictureEditResponseMessage);
+            ///全广播，现在使用RabbitMQ
+            publishToRabbitMq(pictureEditResponseMessage);
         }
     }
 
@@ -268,20 +272,28 @@ public class PictureEditHandler extends TextWebSocketHandler {
         pictureEditResponseMessage.setPictureId(pictureId);
         pictureEditResponseMessage.setUser(BeanUtil.copyProperties(user, UserVO.class));
         ///全广播
-        publishToRedis(pictureEditResponseMessage);
+        publishToRabbitMq(pictureEditResponseMessage);
     }
 
 
     /**
-     * 【核心改动】不直接发，而是把消息丢给 Redis 邮局
+     * 不直接发，而是把消息丢给 Redis 邮局
      */
     private void publishToRedis(PictureEditResponseMessage responseMessage) {
         String jsonMessage = JSONUtil.toJsonStr(responseMessage);
         stringRedisTemplate.convertAndSend(RedisWebSocketConfig.PICTURE_EDIT_CHANNEL, jsonMessage);
     }
+    /**
+     * 发送广播消息到 RabbitMQ
+     */
+    public void publishToRabbitMq(PictureEditResponseMessage responseMessage) {
+        String jsonMessage = JSONUtil.toJsonStr(responseMessage);
+        // 发送到 Fanout 交换机，所有绑定了该交换机的队列（实例）都会收到
+        rabbitTemplate.convertAndSend(RabbitMQWebSocketConfig.PICTURE_EDIT_EXCHANGE, "", jsonMessage);
+    }
 
     /**
-     * 被 Redis 监听器调用，负责真正的本地下发
+     * 被 RabbitMq监听器调用，负责真正的本地下发
      */
     public void broadcastToLocalPicture(Long pictureId, PictureEditResponseMessage responseMessage) throws Exception {
         Set<WebSocketSession> sessions = pictureSessions.get(pictureId);
@@ -310,7 +322,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
                 User sessionUser = (User) attributes.get("user");
                 Long receiverId = sessionUser.getId();
 
-                // 4. 【核心过滤逻辑】：如果是编辑动作，且发送者和接收者是同一个人，则跳过！
+                // 4. 如果是编辑动作，且发送者和接收者是同一个人，则跳过！
                 if (PictureEditMessageTypeEnum.EDIT_ACTION.getValue().equals(messageType)) {
                     if (senderId.equals(receiverId)) {
                         continue; // 成功排除了自己

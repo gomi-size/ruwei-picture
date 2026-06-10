@@ -231,7 +231,7 @@ git clone https://github.com/your-username/ruwei-picture-backend.git
 cd ruwei-picture-backend
 
 # 修改配置文件
-# 编辑 src/main/resources/application.yaml
+# 编辑 src/main/resources/application-dev.yaml
 #   - 数据库连接信息
 #   - Redis 连接信息
 #   - 腾讯云 COS 配置（SecretId/SecretKey/Bucket）

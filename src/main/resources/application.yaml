@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://www.schemastore.org/any.json
 server:
   servlet:
     context-path: /api
@@ -21,26 +22,12 @@ spring:
         url: jdbc:mysql://localhost:3306/yu_picture
         username: root
         password: 123456
-    #rules:
-    #  sharding:
-    #    tables:
-    #      picture:
-    #        actual-data-nodes: yu_picture.picture  # 动态分表
-    #        table-strategy:
-    #          standard:
-    #            sharding-column: spaceId
-    #            sharding-algorithm-name: picture_sharding_algorithm  # 使用自定义分片算法
-    #    sharding-algorithms:
-    #      picture_sharding_algorithm:
-    #        type: CLASS_BASED
-    #        props:
-    #          strategy: standard
-    #          algorithmClassName: com.yupi.yupicturebackend.manager.sharding.PictureShardingAlgorithm
-    #props:
-    #  sql-show: true
-
-
-
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: root
+    password: 123456
+    virtual-host: ruweipicture
   #数据库配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -52,11 +39,10 @@ spring:
     multipart:
       max-file-size: 10MB
   redis:
-    host: 192.168.211.201  # 你的虚拟机 IP
-    port: 6379             # Redis 默认端口
-    database: 0            # 默认使用 0 号数据库
-    timeout: 5000ms        # 连接超时时间（5秒）
-    password: 123456  # <--- 把这行的注释解开，填上密码
+    host: localhost
+    port: 6379
+    database: 0
+    timeout: 5000ms
 #session
   session:
     store-type: redis

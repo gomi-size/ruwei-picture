@@ -159,6 +159,12 @@
             <artifactId>disruptor</artifactId>
             <version>3.4.2</version>
         </dependency>
+        <!--RabbitMQ-->
+        <dependency>
+            <groupId>org.springframework.amqp</groupId>
+            <artifactId>spring-rabbit</artifactId>
+            <version>3.0.0</version>
+        </dependency>
 
     </dependencies>
     <dependencyManagement>

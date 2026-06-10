@@ -2,7 +2,6 @@ package com.yupi.yupicturebackend.service;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.IService;
-import com.yupi.yupicturebackend.common.BaseResponse;
 import com.yupi.yupicturebackend.model.dto.user.UserLoginRequest;
 import com.yupi.yupicturebackend.model.dto.user.UserQueryRequest;
 import com.yupi.yupicturebackend.model.dto.user.UserRegisterRequest;
@@ -20,7 +19,7 @@ import javax.servlet.http.HttpServletRequest;
 public interface UserService extends IService<User> {
 
     /**
-     * 用户注释
+     * 用户注册
      *
      * @param userRegisterRequest
      * @return 用户id
