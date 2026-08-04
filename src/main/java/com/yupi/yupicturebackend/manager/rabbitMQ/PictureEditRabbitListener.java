@@ -9,6 +9,9 @@ import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
 
+/**
+ * RabbitMq消费者
+ */
 @Slf4j
 @Component
 public class PictureEditRabbitListener {

@@ -1,0 +1,27 @@
+# Docker 部署专用配置，敏感值全部通过环境变量注入，不写入镜像
+spring:
+  datasource:
+    url: "${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/ruwei_picture?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai}"
+    username: ${SPRING_DATASOURCE_USERNAME:ruwei_picture}
+    password: ${SPRING_DATASOURCE_PASSWORD:ruwei_picture123456}
+  redis:
+    host: ${SPRING_REDIS_HOST:redis}
+    port: ${SPRING_REDIS_PORT:6379}
+    password: ${SPRING_REDIS_PASSWORD:ruwei_picture123456}
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:rabbitmq}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:ruwei_picture}
+    password: ${SPRING_RABBITMQ_PASSWORD:ruwei_picture123456}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:ruweipicture}
+
+cos:
+  client:
+    host: ${COS_CLIENT_HOST:}
+    secretId: ${COS_CLIENT_SECRET_ID:}
+    secretKey: ${COS_CLIENT_SECRET_KEY:}
+    region: ${COS_CLIENT_REGION:}
+    bucket: ${COS_CLIENT_BUCKET:}
+
+aliYunAi:
+  apiKey: ${ALIYUN_AI_APIKEY:}
